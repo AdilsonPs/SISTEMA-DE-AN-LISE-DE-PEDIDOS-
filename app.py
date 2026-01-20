@@ -28,7 +28,7 @@ try:
     """
     st.markdown(bg_img_code, unsafe_allow_html=True)
 except:
-    st.warning("Imagem de fundo 'logo.jpg' não encontrada.")
+    st.warning("Imagem de fundo 'logo.jpg' não encontrada no GitHub.")
 
 # --- ESTILO CSS ---
 st.markdown("""
@@ -82,12 +82,10 @@ with st.sidebar:
 
 if file_excel and file_pdf:
     try:
-        # Lendo Excel - Agora trazendo a coluna Categoria
         df_precos = pd.read_excel(file_excel, dtype={'Cod Sap': str})
         df_precos['Cod Sap'] = df_precos['Cod Sap'].astype(str).str.strip()
         df_precos['Tab_Price'] = pd.to_numeric(df_precos['Price'], errors='coerce')
         
-        # Garante que a coluna Categoria existe, se não cria uma padrão
         if 'Categoria' not in df_precos.columns:
             df_precos['Categoria'] = 'Geral'
 
@@ -97,7 +95,6 @@ if file_excel and file_pdf:
             for c in ['VLR UND PED', 'Total', 'Qtd']:
                 df_ped[c] = df_ped[c].astype(str).str.replace('.', '').str.replace(',', '.').astype(float)
 
-            # Merge trazendo Categoria
             df = pd.merge(df_ped, df_precos[['Cod Sap', 'Tab_Price', 'Categoria']], on='Cod Sap', how='left')
             
             # Cálculos
@@ -106,53 +103,55 @@ if file_excel and file_pdf:
             df['Desc %'] = (df['Desc Unit R$'] / df['Tab_Price']) * 100
             df['Margem %'] = ((df['VLR UND PED'] - df['Tab_Price']) / df['VLR UND PED']) * 100
 
-            # --- DASHBOARD PRINCIPAL ---
+            # --- RESUMO GERAL ---
+            st.write("### 📈 Resumo Geral")
             total_ped = df['Total'].sum()
             total_desc = df['Desc Total R$'].sum()
             
-            st.write("### 📈 Resumo Geral")
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Itens", f"{len(df)}")
             c2.metric("Desconto Total", fmt_br(total_desc))
             c3.metric("Total Pedido", fmt_br(total_ped))
             c4.metric("Preço Tabela", fmt_br(total_ped + total_desc))
 
-            # --- DASHBOARD POR CATEGORIA ---
+            # --- ANÁLISE POR CATEGORIA ---
             st.write("### 📂 Análise por Categoria")
-            
-            # Agrupando dados por categoria
             cat_group = df.groupby('Categoria').agg({
                 'Total': 'sum',
-                'Desc %': 'mean',
-                'Desc Total R$': 'sum'
+                'Desc %': 'mean'
             }).reset_index()
 
-            # Criando colunas dinâmicas para cada categoria (máximo 4 por linha)
             cols_cat = st.columns(len(cat_group))
             for i, row in cat_group.iterrows():
                 with cols_cat[i]:
-                    label = f"{row['Categoria']}"
-                    valor_ped = fmt_br(row['Total'])
-                    desc_medio = f"{row['Desc %']:.2f}%"
-                    st.metric(label, valor_ped, delta=f"Desconto Médio: {desc_medio}", delta_color="inverse")
+                    st.metric(
+                        label=row['Categoria'], 
+                        value=fmt_br(row['Total']), 
+                        delta=f"Desc. Médio: {row['Desc %']:.2f}%", 
+                        delta_color="inverse"
+                    )
 
             # --- TABELA DETALHADA ---
             st.write("### 📊 Detalhamento dos Itens")
             df_view = df.copy()
+            
+            # Formatação de colunas financeiras
             for col in ['VLR UND PED', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$']:
                 df_view[col] = df_view[col].apply(fmt_br)
             
+            # Formatação de percentuais
             df_view['Desc %'] = df_view['Desc %'].map('{:.2f}%'.format)
             df_view['Margem %'] = df_view['Margem %'].map('{:.2f}%'.format)
 
-            cols = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED', 'Desc %', 'Total']
+            # Colunas REINCLUÍDAS (Margem % de volta aqui)
+            cols = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED', 'Desc %', 'Margem %', 'Total']
             st.dataframe(df_view[cols], use_container_width=True)
 
             # Download
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False)
-            st.download_button("📥 Baixar Excel Completo", output.getvalue(), "analise_aps_categorias.xlsx")
+            st.download_button("📥 Baixar Excel Completo", output.getvalue(), "analise_aps.xlsx")
 
     except Exception as e:
         st.error(f"Erro no processamento: {e}")
