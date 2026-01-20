@@ -3,25 +3,57 @@ import pandas as pd
 import pdfplumber
 import re
 import io
+import base64
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Sistema APS", layout="wide")
 
-# --- ESTILO CSS AJUSTADO (Para leitura em Dark/Light Mode) ---
+# Função para converter imagem local para base64 (necessário para o fundo)
+def get_base64_of_bin_file(bin_file):
+    with open(bin_file, 'rb') as f:
+        data = f.read()
+    return base64.b64encode(data).decode()
+
+# Tenta carregar a imagem de fundo (certifique-se de subir o arquivo 'logo.jpg' no GitHub)
+try:
+    bin_str = get_base64_of_bin_file('logo.jpg') # Ajuste o nome do arquivo aqui se necessário
+    bg_img_code = f"""
+    <style>
+    .stApp {{
+        background-image: linear-gradient(rgba(255,255,255,0.85), rgba(255,255,255,0.85)), url("data:image/png;base64,{bin_str}");
+        background-size: cover;
+        background-attachment: fixed;
+    }}
+    </style>
+    """
+    st.markdown(bg_img_code, unsafe_allow_html=True)
+except:
+    st.warning("Imagem de fundo 'logo.jpg' não encontrada no GitHub. Usando fundo padrão.")
+
+# --- ESTILO CSS PARA OS CARDS (Correção de cores) ---
 st.markdown("""
     <style>
-    /* Estilização dos Cards para ficarem visíveis */
-    [data-testid="stMetricValue"] { font-size: 1.8rem !important; color: #1a73e8 !important; }
-    [data-testid="stMetricLabel"] { font-weight: bold !important; text-transform: uppercase !important; }
-    .stMetric {
-        background-color: #ffffff !important;
-        padding: 15px !important;
-        border-radius: 10px !important;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1) !important;
-        border: 1px solid #e0e0e0 !important;
+    /* Estilização dos Cards para leitura clara */
+    [data-testid="stMetricValue"] { 
+        font-size: 1.8rem !important; 
+        color: #0d47a1 !important; /* Azul escuro para o valor */
     }
-    /* Ajuste para que o texto dentro do card branco seja sempre escuro */
-    [data-testid="stMetricLabel"] > div { color: #5f6368 !important; }
+    [data-testid="stMetricLabel"] { 
+        font-weight: bold !important; 
+        color: #333333 !important; /* Cinza escuro para o rótulo */
+    }
+    .stMetric {
+        background-color: rgba(255, 255, 255, 0.95) !important; /* Fundo quase sólido para destacar do fundo do app */
+        padding: 15px !important;
+        border-radius: 12px !important;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.15) !important;
+        border: 1px solid #ddd !important;
+    }
+    /* Estilo para a tabela */
+    .stDataFrame {
+        background-color: white !important;
+        border-radius: 10px !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -75,28 +107,27 @@ if file_excel and file_pdf:
 
             df = pd.merge(df_ped, df_precos[['Cod Sap', 'Tab_Price']], on='Cod Sap', how='left')
             
-            # Cálculos Corrigidos
+            # Cálculos
             df['Desc Unit R$'] = df['Tab_Price'] - df['Unit']
             df['Desc Total R$'] = df['Desc Unit R$'] * df['Qtd']
             df['Desc %'] = (df['Desc Unit R$'] / df['Tab_Price']) * 100
             df['Margem %'] = ((df['Unit'] - df['Tab_Price']) / df['Unit']) * 100
 
-            # Dashboard
+            # Dashboard (Métricas)
             total_ped = df['Total'].sum()
             total_desc = df['Desc Total R$'].sum()
             
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Itens", f"{len(df)}")
-            c2.metric("Desconto Total", fmt_br(total_desc), delta=f"-{total_desc/total_ped*100:.1f}%", delta_color="inverse")
+            c2.metric("Desconto Total", fmt_br(total_desc))
             c3.metric("Total Pedido", fmt_br(total_ped))
             c4.metric("Preço Tabela", fmt_br(total_ped + total_desc))
 
             st.write("### 📊 Detalhamento dos Itens")
             
-            # FORMATAÇÃO DA TABELA (Colunas Financeiras)
+            # Formatação Financeira para exibição
             df_view = df.copy()
-            cols_financeiras = ['Unit', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$']
-            for col in cols_financeiras:
+            for col in ['Unit', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$']:
                 df_view[col] = df_view[col].apply(fmt_br)
             
             df_view['Desc %'] = df_view['Desc %'].map('{:.2f}%'.format)
@@ -104,7 +135,7 @@ if file_excel and file_pdf:
 
             st.dataframe(df_view, use_container_width=True)
 
-            # Botão de Download
+            # Download
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False)
@@ -112,4 +143,3 @@ if file_excel and file_pdf:
 
     except Exception as e:
         st.error(f"Erro: {e}")
-      
