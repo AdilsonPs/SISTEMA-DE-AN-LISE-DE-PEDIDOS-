@@ -8,13 +8,13 @@ import base64
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Sistema APS", layout="wide")
 
-# Função para converter imagem local para base64 (necessário para o fundo)
+# Função para converter imagem local para base64
 def get_base64_of_bin_file(bin_file):
     with open(bin_file, 'rb') as f:
         data = f.read()
     return base64.b64encode(data).decode()
 
-# Tenta carregar a imagem de fundo (certifique-se de subir o arquivo 'logo.jpg' no GitHub)
+# Fundo com imagem
 try:
     bin_str = get_base64_of_bin_file('logo.jpg') 
     bg_img_code = f"""
@@ -28,34 +28,23 @@ try:
     """
     st.markdown(bg_img_code, unsafe_allow_html=True)
 except:
-    st.warning("Imagem de fundo 'logo.jpg' não encontrada no GitHub. Usando fundo padrão.")
+    st.warning("Imagem de fundo 'logo.jpg' não encontrada.")
 
-# --- ESTILO CSS PARA OS CARDS (Correção de cores) ---
+# --- ESTILO CSS ---
 st.markdown("""
     <style>
-    [data-testid="stMetricValue"] { 
-        font-size: 1.8rem !important; 
-        color: #0d47a1 !important; 
-    }
-    [data-testid="stMetricLabel"] { 
-        font-weight: bold !important; 
-        color: #333333 !important; 
-    }
+    [data-testid="stMetricValue"] { font-size: 1.6rem !important; color: #0d47a1 !important; }
+    [data-testid="stMetricLabel"] { font-weight: bold !important; color: #333333 !important; }
     .stMetric {
         background-color: rgba(255, 255, 255, 0.95) !important;
         padding: 15px !important;
         border-radius: 12px !important;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.15) !important;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.1) !important;
         border: 1px solid #ddd !important;
-    }
-    .stDataFrame {
-        background-color: white !important;
-        border-radius: 10px !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNÇÕES DE APOIO ---
 def fmt_br(v):
     return f"R$ {v:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.') if pd.notnull(v) else "R$ 0,00"
 
@@ -80,7 +69,6 @@ def extract_pdf_data(file):
                             break
                     vals = re.findall(r'\d+[\d.]*,\d+', txt)
                     if len(vals) >= 3:
-                        # Alterado de 'Unit' para 'VLR UND PED'
                         all_data.append({'Cod Sap': material, 'Descrição': denom, 'Qtd': vals[0], 'VLR UND PED': vals[1], 'Total': vals[2]})
     return pd.DataFrame(all_data)
 
@@ -94,9 +82,14 @@ with st.sidebar:
 
 if file_excel and file_pdf:
     try:
+        # Lendo Excel - Agora trazendo a coluna Categoria
         df_precos = pd.read_excel(file_excel, dtype={'Cod Sap': str})
         df_precos['Cod Sap'] = df_precos['Cod Sap'].astype(str).str.strip()
         df_precos['Tab_Price'] = pd.to_numeric(df_precos['Price'], errors='coerce')
+        
+        # Garante que a coluna Categoria existe, se não cria uma padrão
+        if 'Categoria' not in df_precos.columns:
+            df_precos['Categoria'] = 'Geral'
 
         df_ped = extract_pdf_data(file_pdf)
         
@@ -104,46 +97,62 @@ if file_excel and file_pdf:
             for c in ['VLR UND PED', 'Total', 'Qtd']:
                 df_ped[c] = df_ped[c].astype(str).str.replace('.', '').str.replace(',', '.').astype(float)
 
-            df = pd.merge(df_ped, df_precos[['Cod Sap', 'Tab_Price']], on='Cod Sap', how='left')
+            # Merge trazendo Categoria
+            df = pd.merge(df_ped, df_precos[['Cod Sap', 'Tab_Price', 'Categoria']], on='Cod Sap', how='left')
             
-            # Cálculos com o novo nome de coluna
+            # Cálculos
             df['Desc Unit R$'] = df['Tab_Price'] - df['VLR UND PED']
             df['Desc Total R$'] = df['Desc Unit R$'] * df['Qtd']
             df['Desc %'] = (df['Desc Unit R$'] / df['Tab_Price']) * 100
             df['Margem %'] = ((df['VLR UND PED'] - df['Tab_Price']) / df['VLR UND PED']) * 100
 
-            # Dashboard (Métricas)
+            # --- DASHBOARD PRINCIPAL ---
             total_ped = df['Total'].sum()
             total_desc = df['Desc Total R$'].sum()
             
+            st.write("### 📈 Resumo Geral")
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Itens", f"{len(df)}")
             c2.metric("Desconto Total", fmt_br(total_desc))
             c3.metric("Total Pedido", fmt_br(total_ped))
             c4.metric("Preço Tabela", fmt_br(total_ped + total_desc))
 
-            st.write("### 📊 Detalhamento dos Itens")
+            # --- DASHBOARD POR CATEGORIA ---
+            st.write("### 📂 Análise por Categoria")
             
-            # Formatação Financeira para exibição
+            # Agrupando dados por categoria
+            cat_group = df.groupby('Categoria').agg({
+                'Total': 'sum',
+                'Desc %': 'mean',
+                'Desc Total R$': 'sum'
+            }).reset_index()
+
+            # Criando colunas dinâmicas para cada categoria (máximo 4 por linha)
+            cols_cat = st.columns(len(cat_group))
+            for i, row in cat_group.iterrows():
+                with cols_cat[i]:
+                    label = f"{row['Categoria']}"
+                    valor_ped = fmt_br(row['Total'])
+                    desc_medio = f"{row['Desc %']:.2f}%"
+                    st.metric(label, valor_ped, delta=f"Desconto Médio: {desc_medio}", delta_color="inverse")
+
+            # --- TABELA DETALHADA ---
+            st.write("### 📊 Detalhamento dos Itens")
             df_view = df.copy()
-            # 'Unit' agora é 'VLR UND PED' na lista de formatação
             for col in ['VLR UND PED', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$']:
                 df_view[col] = df_view[col].apply(fmt_br)
             
             df_view['Desc %'] = df_view['Desc %'].map('{:.2f}%'.format)
             df_view['Margem %'] = df_view['Margem %'].map('{:.2f}%'.format)
 
-            # Reordenando colunas para ficar visualmente melhor
-            cols = ['Cod Sap', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED', 'Desc Unit R$', 'Desc Total R$', 'Desc %', 'Margem %', 'Total']
+            cols = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED', 'Desc %', 'Total']
             st.dataframe(df_view[cols], use_container_width=True)
 
             # Download
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False)
-            st.download_button("📥 Baixar Excel", output.getvalue(), "analise_pedido_aps.xlsx")
+            st.download_button("📥 Baixar Excel Completo", output.getvalue(), "analise_aps_categorias.xlsx")
 
     except Exception as e:
         st.error(f"Erro no processamento: {e}")
-else:
-    st.info("Por favor, faça o upload da Tabela de Preços e do Pedido para começar.")
