@@ -10,13 +10,16 @@ st.set_page_config(page_title="Sistema APS", layout="wide")
 
 # Função para converter imagem local para base64
 def get_base64_of_bin_file(bin_file):
-    with open(bin_file, 'rb') as f:
-        data = f.read()
-    return base64.b64encode(data).decode()
+    try:
+        with open(bin_file, 'rb') as f:
+            data = f.read()
+        return base64.b64encode(data).decode()
+    except:
+        return None
 
 # Fundo com imagem
-try:
-    bin_str = get_base64_of_bin_file('logo.jpg') 
+bin_str = get_base64_of_bin_file('logo.jpg') 
+if bin_str:
     bg_img_code = f"""
     <style>
     .stApp {{
@@ -27,8 +30,8 @@ try:
     </style>
     """
     st.markdown(bg_img_code, unsafe_allow_html=True)
-except:
-    st.warning("Imagem de fundo 'logo.jpg' não encontrada no GitHub.")
+else:
+    st.sidebar.warning("Imagem de fundo 'logo.jpg' não encontrada.")
 
 # --- ESTILO CSS ---
 st.markdown("""
@@ -97,7 +100,7 @@ if file_excel and file_pdf:
 
             df = pd.merge(df_ped, df_precos[['Cod Sap', 'Tab_Price', 'Categoria']], on='Cod Sap', how='left')
             
-            # Cálculos
+            # Cálculos por Item
             df['Desc Unit R$'] = df['Tab_Price'] - df['VLR UND PED']
             df['Desc Total R$'] = df['Desc Unit R$'] * df['Qtd']
             df['Desc %'] = (df['Desc Unit R$'] / df['Tab_Price']) * 100
@@ -107,12 +110,17 @@ if file_excel and file_pdf:
             st.write("### 📈 Resumo Geral")
             total_ped = df['Total'].sum()
             total_desc = df['Desc Total R$'].sum()
+            total_tabela = total_ped + total_desc
             
-            c1, c2, c3, c4 = st.columns(4)
+            # Margem Final Consolidada (Ponderada)
+            margem_final = ((total_ped - total_tabela) / total_ped * 100) if total_ped != 0 else 0
+            
+            c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("Itens", f"{len(df)}")
             c2.metric("Desconto Total", fmt_br(total_desc))
             c3.metric("Total Pedido", fmt_br(total_ped))
-            c4.metric("Preço Tabela", fmt_br(total_ped + total_desc))
+            c4.metric("Preço Tabela", fmt_br(total_tabela))
+            c5.metric("Margem Final", f"{margem_final:.2f}%")
 
             # --- ANÁLISE POR CATEGORIA ---
             st.write("### 📂 Análise por Categoria")
@@ -135,7 +143,7 @@ if file_excel and file_pdf:
             st.write("### 📊 Detalhamento dos Itens")
             df_view = df.copy()
             
-            # Formatação de colunas financeiras
+            # Formatação de colunas financeiras para visualização
             for col in ['VLR UND PED', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$']:
                 df_view[col] = df_view[col].apply(fmt_br)
             
@@ -143,15 +151,17 @@ if file_excel and file_pdf:
             df_view['Desc %'] = df_view['Desc %'].map('{:.2f}%'.format)
             df_view['Margem %'] = df_view['Margem %'].map('{:.2f}%'.format)
 
-            # Colunas REINCLUÍDAS (Margem % de volta aqui)
-            cols = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED', 'Desc %', 'Margem %', 'Total']
-            st.dataframe(df_view[cols], use_container_width=True)
+            cols_grid = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED', 'Desc %', 'Margem %', 'Total']
+            st.dataframe(df_view[cols_grid], use_container_width=True)
 
             # Download
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False)
             st.download_button("📥 Baixar Excel Completo", output.getvalue(), "analise_aps.xlsx")
+
+        else:
+            st.warning("Nenhum dado encontrado no PDF.")
 
     except Exception as e:
         st.error(f"Erro no processamento: {e}")
