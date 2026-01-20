@@ -16,7 +16,7 @@ def get_base64_of_bin_file(bin_file):
 
 # Tenta carregar a imagem de fundo (certifique-se de subir o arquivo 'logo.jpg' no GitHub)
 try:
-    bin_str = get_base64_of_bin_file('logo.jpg') # Ajuste o nome do arquivo aqui se necessário
+    bin_str = get_base64_of_bin_file('logo.jpg') 
     bg_img_code = f"""
     <style>
     .stApp {{
@@ -33,23 +33,21 @@ except:
 # --- ESTILO CSS PARA OS CARDS (Correção de cores) ---
 st.markdown("""
     <style>
-    /* Estilização dos Cards para leitura clara */
     [data-testid="stMetricValue"] { 
         font-size: 1.8rem !important; 
-        color: #0d47a1 !important; /* Azul escuro para o valor */
+        color: #0d47a1 !important; 
     }
     [data-testid="stMetricLabel"] { 
         font-weight: bold !important; 
-        color: #333333 !important; /* Cinza escuro para o rótulo */
+        color: #333333 !important; 
     }
     .stMetric {
-        background-color: rgba(255, 255, 255, 0.95) !important; /* Fundo quase sólido para destacar do fundo do app */
+        background-color: rgba(255, 255, 255, 0.95) !important;
         padding: 15px !important;
         border-radius: 12px !important;
         box-shadow: 0 4px 10px rgba(0,0,0,0.15) !important;
         border: 1px solid #ddd !important;
     }
-    /* Estilo para a tabela */
     .stDataFrame {
         background-color: white !important;
         border-radius: 10px !important;
@@ -82,7 +80,8 @@ def extract_pdf_data(file):
                             break
                     vals = re.findall(r'\d+[\d.]*,\d+', txt)
                     if len(vals) >= 3:
-                        all_data.append({'Cod Sap': material, 'Descrição': denom, 'Qtd': vals[0], 'Unit': vals[1], 'Total': vals[2]})
+                        # Alterado de 'Unit' para 'VLR UND PED'
+                        all_data.append({'Cod Sap': material, 'Descrição': denom, 'Qtd': vals[0], 'VLR UND PED': vals[1], 'Total': vals[2]})
     return pd.DataFrame(all_data)
 
 # --- INTERFACE ---
@@ -102,16 +101,16 @@ if file_excel and file_pdf:
         df_ped = extract_pdf_data(file_pdf)
         
         if not df_ped.empty:
-            for c in ['Unit', 'Total', 'Qtd']:
+            for c in ['VLR UND PED', 'Total', 'Qtd']:
                 df_ped[c] = df_ped[c].astype(str).str.replace('.', '').str.replace(',', '.').astype(float)
 
             df = pd.merge(df_ped, df_precos[['Cod Sap', 'Tab_Price']], on='Cod Sap', how='left')
             
-            # Cálculos
-            df['Desc Unit R$'] = df['Tab_Price'] - df['Unit']
+            # Cálculos com o novo nome de coluna
+            df['Desc Unit R$'] = df['Tab_Price'] - df['VLR UND PED']
             df['Desc Total R$'] = df['Desc Unit R$'] * df['Qtd']
             df['Desc %'] = (df['Desc Unit R$'] / df['Tab_Price']) * 100
-            df['Margem %'] = ((df['Unit'] - df['Tab_Price']) / df['Unit']) * 100
+            df['Margem %'] = ((df['VLR UND PED'] - df['Tab_Price']) / df['VLR UND PED']) * 100
 
             # Dashboard (Métricas)
             total_ped = df['Total'].sum()
@@ -127,19 +126,24 @@ if file_excel and file_pdf:
             
             # Formatação Financeira para exibição
             df_view = df.copy()
-            for col in ['Unit', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$']:
+            # 'Unit' agora é 'VLR UND PED' na lista de formatação
+            for col in ['VLR UND PED', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$']:
                 df_view[col] = df_view[col].apply(fmt_br)
             
             df_view['Desc %'] = df_view['Desc %'].map('{:.2f}%'.format)
             df_view['Margem %'] = df_view['Margem %'].map('{:.2f}%'.format)
 
-            st.dataframe(df_view, use_container_width=True)
+            # Reordenando colunas para ficar visualmente melhor
+            cols = ['Cod Sap', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED', 'Desc Unit R$', 'Desc Total R$', 'Desc %', 'Margem %', 'Total']
+            st.dataframe(df_view[cols], use_container_width=True)
 
             # Download
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False)
-            st.download_button("📥 Baixar Excel", output.getvalue(), "analise.xlsx")
+            st.download_button("📥 Baixar Excel", output.getvalue(), "analise_pedido_aps.xlsx")
 
     except Exception as e:
-        st.error(f"Erro: {e}")
+        st.error(f"Erro no processamento: {e}")
+else:
+    st.info("Por favor, faça o upload da Tabela de Preços e do Pedido para começar.")
