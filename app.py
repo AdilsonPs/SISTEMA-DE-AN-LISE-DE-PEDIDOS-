@@ -112,15 +112,23 @@ if file_excel and file_pdf:
             total_desc = df['Desc Total R$'].sum()
             total_tabela = total_ped + total_desc
             
+            # Cálculo do Desconto Médio do Pedido Inteiro
+            perc_desconto_total = (total_desc / total_tabela * 100) if total_tabela != 0 else 0
             # Margem Final Consolidada (Ponderada)
             margem_final = ((total_ped - total_tabela) / total_ped * 100) if total_ped != 0 else 0
             
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("Itens", f"{len(df)}")
-            c2.metric("Desconto Total", fmt_br(total_desc))
-            c3.metric("Total Pedido", fmt_br(total_ped))
-            c4.metric("Preço Tabela", fmt_br(total_tabela))
-            c5.metric("Margem Final", f"{margem_final:.2f}%")
+            # Exibição em duas linhas de 3 colunas para melhor leitura
+            r1_c1, r1_c2, r1_c3 = st.columns(3)
+            r1_c1.metric("Itens no Pedido", f"{len(df)}")
+            r1_c2.metric("Preço Total Tabela", fmt_br(total_tabela))
+            r1_c3.metric("Total Líquido Pedido", fmt_br(total_ped))
+
+            r2_c1, r2_c2, r2_c3 = st.columns(3)
+            r2_c1.metric("Desconto Total (R$)", fmt_br(total_desc))
+            r2_c2.metric("% Desconto Global", f"{perc_desconto_total:.2f}%", delta_color="inverse")
+            r2_c3.metric("Margem Final", f"{margem_final:.2f}%")
+
+            st.markdown("---")
 
             # --- ANÁLISE POR CATEGORIA ---
             st.write("### 📂 Análise por Categoria")
@@ -129,7 +137,7 @@ if file_excel and file_pdf:
                 'Desc %': 'mean'
             }).reset_index()
 
-            cols_cat = st.columns(len(cat_group))
+            cols_cat = st.columns(len(cat_group) if len(cat_group) > 0 else 1)
             for i, row in cat_group.iterrows():
                 with cols_cat[i]:
                     st.metric(
@@ -158,10 +166,11 @@ if file_excel and file_pdf:
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False)
-            st.download_button("📥 Baixar Excel Completo", output.getvalue(), "analise_aps.xlsx")
+            st.sidebar.markdown("---")
+            st.sidebar.download_button("📥 Baixar Excel Completo", output.getvalue(), "analise_aps.xlsx", use_container_width=True)
 
         else:
-            st.warning("Nenhum dado encontrado no PDF.")
+            st.warning("Nenhum dado compatível com o padrão (Código SAP) encontrado no PDF.")
 
     except Exception as e:
         st.error(f"Erro no processamento: {e}")
