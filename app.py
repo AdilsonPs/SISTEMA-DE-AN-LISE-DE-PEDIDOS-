@@ -16,6 +16,7 @@ def get_base64_of_bin_file(bin_file):
     except:
         return None
 
+# Aplicação do Background
 bin_str = get_base64_of_bin_file('logo.jpg') 
 if bin_str:
     bg_img_code = f"""
@@ -28,6 +29,21 @@ if bin_str:
     </style>
     """
     st.markdown(bg_img_code, unsafe_allow_html=True)
+
+# Estilização das Métricas
+st.markdown("""
+    <style>
+    [data-testid="stMetricValue"] { font-size: 1.6rem !important; color: #0d47a1 !important; }
+    [data-testid="stMetricLabel"] { font-weight: bold !important; color: #333333 !important; }
+    .stMetric {
+        background-color: rgba(255, 255, 255, 0.95) !important;
+        padding: 15px !important;
+        border-radius: 12px !important;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.1) !important;
+        border: 1px solid #ddd !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 def fmt_br(v):
     return f"R$ {v:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.') if pd.notnull(v) else "R$ 0,00"
@@ -53,7 +69,13 @@ def extract_pdf_data(file):
                             break
                     vals = re.findall(r'\d+[\d.]*,\d+', txt)
                     if len(vals) >= 3:
-                        all_data.append({'Cod Sap': material, 'Descrição': denom, 'Qtd': vals[0], 'VLR UND PED': vals[1], 'Total': vals[2]})
+                        all_data.append({
+                            'Cod Sap': material, 
+                            'Descrição': denom, 
+                            'Qtd': vals[0], 
+                            'VLR UND PED': vals[1], 
+                            'Total': vals[2]
+                        })
     return pd.DataFrame(all_data)
 
 # --- INTERFACE ---
@@ -74,6 +96,7 @@ with st.sidebar:
 
 if file_excel_precos and file_pedido:
     try:
+        # 1. Carregar Tabela de Preços
         df_precos = pd.read_excel(file_excel_precos, dtype={'Cod Sap': str})
         df_precos['Cod Sap'] = df_precos['Cod Sap'].astype(str).str.strip()
         df_precos['Tab_Price'] = pd.to_numeric(df_precos['Price'], errors='coerce')
@@ -82,26 +105,36 @@ if file_excel_precos and file_pedido:
 
         df_ped = pd.DataFrame()
 
+        # 2. Lógica de Extração
         if modalidade == "CIF (PDF)":
             df_ped = extract_pdf_data(file_pedido)
             if not df_ped.empty:
                 for c in ['VLR UND PED', 'Total', 'Qtd']:
                     df_ped[c] = df_ped[c].astype(str).str.replace('.', '').str.replace(',', '.').astype(float)
         else:
+            # Lógica FOB para a aba 'Resumo'
             df_fob_raw = pd.read_excel(file_pedido, sheet_name='Resumo', skiprows=2)
             df_fob_raw.columns = df_fob_raw.columns.str.strip()
             
-            df_ped = pd.DataFrame({
-                'Cod Sap': df_fob_raw['Material'].astype(str).str.strip(),
-                'Descrição': df_fob_raw['Descrição do Material'],
-                'Qtd': pd.to_numeric(df_fob_raw['Quant. Ped.Período'], errors='coerce'),
-                'VLR UND PED': pd.to_numeric(df_fob_raw['Valor FD / CX'], errors='coerce'),
-                'VLR DESC FOB': pd.to_numeric(df_fob_raw['Desc.Vendedor'], errors='coerce').fillna(0)
-            })
-            df_ped['Total'] = df_ped['Qtd'] * df_ped['VLR UND PED']
+            df_ped = pd.DataFrame()
+            df_ped['Cod Sap'] = df_fob_raw['Material'].astype(str).str.strip()
+            df_ped['Descrição'] = df_fob_raw['Descrição do Material']
+            df_ped['Qtd'] = pd.to_numeric(df_fob_raw['Quant. Ped.Período'], errors='coerce')
+            df_ped['VLR UND PED'] = pd.to_numeric(df_fob_raw['Valor FD / CX'], errors='coerce')
+            
+            # --- CAPTURA DA COLUNA SOLICITADA ---
+            if 'Desc.Vendedor' in df_fob_raw.columns:
+                df_ped['Desc.Vendedor'] = pd.to_numeric(df_fob_raw['Desc.Vendedor'], errors='coerce')
+            
+            if 'Valor Total' in df_fob_raw.columns:
+                df_ped['Total'] = pd.to_numeric(df_fob_raw['Valor Total'], errors='coerce')
+            else:
+                df_ped['Total'] = df_ped['Qtd'] * df_ped['VLR UND PED']
+            
             df_ped = df_ped.dropna(subset=['Cod Sap', 'VLR UND PED'])
             df_ped = df_ped[df_ped['Cod Sap'] != 'nan']
 
+        # 3. Cruzamento e Cálculos
         if not df_ped.empty:
             df = pd.merge(df_ped, df_precos[['Cod Sap', 'Tab_Price', 'Categoria']], on='Cod Sap', how='left')
             df['Tab_Price'] = df['Tab_Price'].fillna(0)
@@ -109,60 +142,79 @@ if file_excel_precos and file_pedido:
             df['Desc Unit R$'] = df['Tab_Price'] - df['VLR UND PED']
             df['Desc Total R$'] = df['Desc Unit R$'] * df['Qtd']
             df['Desc %'] = df.apply(lambda x: (x['Desc Unit R$'] / x['Tab_Price'] * 100) if x['Tab_Price'] > 0 else 0, axis=1)
+            df['Margem %'] = df.apply(lambda x: ((x['VLR UND PED'] - x['Tab_Price']) / x['VLR UND PED'] * 100) if x['VLR UND PED'] > 0 else 0, axis=1)
+
+            # --- EXIBIÇÃO ---
+            st.write(f"### 📈 Resumo Geral - Modalidade {modalidade.split(' ')[0]}")
             
-            # --- CÁLCULOS DE RESUMO ---
             total_ped = df['Total'].sum()
-            total_desc_tab = df['Desc Total R$'].sum()
-            total_tabela = (df['Tab_Price'] * df['Qtd']).sum()
+            total_desc = df['Desc Total R$'].sum()
+            total_tabela = df.apply(lambda x: x['Tab_Price'] * x['Qtd'], axis=1).sum()
+            perc_desconto_global = (total_desc / total_tabela * 100) if total_tabela > 0 else 0
             margem_final = ((total_ped - total_tabela) / total_ped * 100) if total_ped > 0 else 0
             
-            st.write(f"### 📈 Resumo Geral ({modalidade.split(' ')[0]})")
-            
-            # Primeira Linha de Métricas
-            r1_c1, r1_c2, r1_c3 = st.columns(3)
-            r1_c1.metric("Itens no Pedido", len(df))
-            r1_c2.metric("Preço Total Tabela", fmt_br(total_tabela))
-            r1_c3.metric("Total Líquido Pedido", fmt_br(total_ped))
+            # Linha 1 de métricas
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Itens no Pedido", len(df))
+            col2.metric("Preço Total Tabela", fmt_br(total_tabela))
+            col3.metric("Total Líquido Pedido", fmt_br(total_ped))
 
-            # Segunda Linha de Métricas (Onde entra o VLR DESC FOB)
-            r2_c1, r2_c2, r2_c3 = st.columns(3)
-            r2_c1.metric("Desc. vs Tabela (Total)", fmt_br(total_desc_tab))
+            # Linha 2 de métricas (Onde entra a nova caixinha)
+            col4, col5, col6 = st.columns(3)
+            col4.metric("Desconto Total (R$)", fmt_br(total_desc))
+            col5.metric("% Desconto Global", f"{perc_desconto_global:.2f}%", delta_color="inverse")
             
-            if modalidade == "FOB (Excel)":
-                # Cálculo do Desconto FOB Total (Somatório de Desc.Vendedor por item * Qtd)
-                total_desc_vendedor = (df['VLR DESC FOB'] * df['Qtd']).sum()
-                r2_c2.metric("VLR DESC FOB (Vendedor)", fmt_br(total_desc_vendedor))
+            # Lógica Condicional para a terceira caixinha
+            if modalidade == "FOB (Excel)" and 'Desc.Vendedor' in df.columns:
+                media_fob_vendedor = df['Desc.Vendedor'].mean()
+                # Ajuste caso o valor venha como 0.05 em vez de 5.0
+                if 0 < media_fob_vendedor < 1:
+                    media_fob_vendedor *= 100
+                col6.metric("Média Desconto FOB (%)", f"{media_fob_vendedor:.2f}%", help="Média calculada da coluna Desc.Vendedor")
             else:
-                perc_desc_global = (total_desc_tab / total_tabela * 100) if total_tabela > 0 else 0
-                r2_c2.metric("% Desconto Global", f"{perc_desc_global:.2f}%")
-            
-            r2_c3.metric("Margem Final", f"{margem_final:.2f}%")
+                col6.metric("Margem Final (Ponderada)", f"{margem_final:.2f}%")
 
             st.markdown("---")
             
-            # --- TABELA DETALHADA ---
+            # Análise por Categoria
+            st.write("### 📂 Análise por Categoria")
+            cat_group = df.groupby('Categoria').agg({'Total': 'sum', 'Desc %': 'mean'}).reset_index()
+            cols_cat = st.columns(len(cat_group) if len(cat_group) > 0 else 1)
+            for i, row in cat_group.iterrows():
+                with cols_cat[i]:
+                    st.metric(label=row['Categoria'], value=fmt_br(row['Total']), 
+                              delta=f"Desc. Médio: {row['Desc %']:.2f}%", delta_color="inverse")
+
             st.write("### 📊 Detalhamento dos Itens")
             df_view = df.copy()
-            cols_to_fmt = ['VLR UND PED', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$']
-            if 'VLR DESC FOB' in df_view.columns: cols_to_fmt.append('VLR DESC FOB')
             
-            for col in cols_to_fmt:
-                df_view[col] = df_view[col].apply(fmt_br)
+            # Colunas para exibir no Grid
+            cols_grid = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED', 'Desc %', 'Margem %', 'Total']
+            if 'Desc.Vendedor' in df_view.columns:
+                cols_grid.insert(6, 'Desc.Vendedor')
+
+            # Formatação para visualização
+            for col in ['VLR UND PED', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$']:
+                if col in df_view.columns:
+                    df_view[col] = df_view[col].apply(fmt_br)
             
             df_view['Desc %'] = df_view['Desc %'].map('{:.2f}%'.format)
-            
-            show_cols = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED']
-            if modalidade == "FOB (Excel)": show_cols.append('VLR DESC FOB')
-            show_cols += ['Desc %', 'Total']
-            
-            st.dataframe(df_view[show_cols], use_container_width=True)
+            df_view['Margem %'] = df_view['Margem %'].map('{:.2f}%'.format)
+            if 'Desc.Vendedor' in df_view.columns:
+                df_view['Desc.Vendedor'] = df_view['Desc.Vendedor'].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
 
-            # Download
+            st.dataframe(df_view[cols_grid], use_container_width=True)
+
+            # Sidebar Download
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False)
             st.sidebar.markdown("---")
-            st.sidebar.download_button("📥 Baixar Excel", output.getvalue(), "analise_aps.xlsx", use_container_width=True)
-    
+            st.sidebar.download_button("📥 Baixar Análise em Excel", output.getvalue(), "analise_aps.xlsx", use_container_width=True)
+
+        else:
+            st.warning("Não foi possível encontrar dados válidos no arquivo de pedido.")
+
     except Exception as e:
-        st.error(f"Erro: {e}")
+        st.error(f"Ocorreu um erro ao processar os arquivos: {e}")
+        st.info("Dica: Verifique se a aba do arquivo FOB chama-se exatamente 'Resumo' e se a coluna 'Desc.Vendedor' existe.")
