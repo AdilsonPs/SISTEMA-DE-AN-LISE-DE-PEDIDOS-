@@ -16,7 +16,6 @@ def get_base64_of_bin_file(bin_file):
     except:
         return None
 
-# Aplicação do Background
 bin_str = get_base64_of_bin_file('logo.jpg') 
 if bin_str:
     bg_img_code = f"""
@@ -30,7 +29,6 @@ if bin_str:
     """
     st.markdown(bg_img_code, unsafe_allow_html=True)
 
-# Estilização das Métricas
 st.markdown("""
     <style>
     [data-testid="stMetricValue"] { font-size: 1.6rem !important; color: #0d47a1 !important; }
@@ -96,7 +94,6 @@ with st.sidebar:
 
 if file_excel_precos and file_pedido:
     try:
-        # 1. Carregar Tabela de Preços
         df_precos = pd.read_excel(file_excel_precos, dtype={'Cod Sap': str})
         df_precos['Cod Sap'] = df_precos['Cod Sap'].astype(str).str.strip()
         df_precos['Tab_Price'] = pd.to_numeric(df_precos['Price'], errors='coerce')
@@ -105,14 +102,12 @@ if file_excel_precos and file_pedido:
 
         df_ped = pd.DataFrame()
 
-        # 2. Lógica de Extração
         if modalidade == "CIF (PDF)":
             df_ped = extract_pdf_data(file_pedido)
             if not df_ped.empty:
                 for c in ['VLR UND PED', 'Total', 'Qtd']:
                     df_ped[c] = df_ped[c].astype(str).str.replace('.', '').str.replace(',', '.').astype(float)
         else:
-            # Lógica FOB para a aba 'Resumo'
             df_fob_raw = pd.read_excel(file_pedido, sheet_name='Resumo', skiprows=2)
             df_fob_raw.columns = df_fob_raw.columns.str.strip()
             
@@ -122,7 +117,6 @@ if file_excel_precos and file_pedido:
             df_ped['Qtd'] = pd.to_numeric(df_fob_raw['Quant. Ped.Período'], errors='coerce')
             df_ped['VLR UND PED'] = pd.to_numeric(df_fob_raw['Valor FD / CX'], errors='coerce')
             
-            # --- CAPTURA DA COLUNA SOLICITADA ---
             if 'Desc.Vendedor' in df_fob_raw.columns:
                 df_ped['Desc.Vendedor'] = pd.to_numeric(df_fob_raw['Desc.Vendedor'], errors='coerce')
             
@@ -134,7 +128,6 @@ if file_excel_precos and file_pedido:
             df_ped = df_ped.dropna(subset=['Cod Sap', 'VLR UND PED'])
             df_ped = df_ped[df_ped['Cod Sap'] != 'nan']
 
-        # 3. Cruzamento e Cálculos
         if not df_ped.empty:
             df = pd.merge(df_ped, df_precos[['Cod Sap', 'Tab_Price', 'Categoria']], on='Cod Sap', how='left')
             df['Tab_Price'] = df['Tab_Price'].fillna(0)
@@ -153,30 +146,31 @@ if file_excel_precos and file_pedido:
             perc_desconto_global = (total_desc / total_tabela * 100) if total_tabela > 0 else 0
             margem_final = ((total_ped - total_tabela) / total_ped * 100) if total_ped > 0 else 0
             
-            # Linha 1 de métricas
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Itens no Pedido", len(df))
-            col2.metric("Preço Total Tabela", fmt_br(total_tabela))
-            col3.metric("Total Líquido Pedido", fmt_br(total_ped))
+            # Linha 1: Valores Financeiros
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Itens no Pedido", len(df))
+            m2.metric("Preço Total Tabela", fmt_br(total_tabela))
+            m3.metric("Total Líquido Pedido", fmt_br(total_ped))
 
-            # Linha 2 de métricas (Onde entra a nova caixinha)
-            col4, col5, col6 = st.columns(3)
-            col4.metric("Desconto Total (R$)", fmt_br(total_desc))
-            col5.metric("% Desconto Global", f"{perc_desconto_global:.2f}%", delta_color="inverse")
-            
-            # Lógica Condicional para a terceira caixinha
+            # Linha 2: Percentuais e Descontos
+            # Se for FOB, usaremos 4 colunas para caber o Desconto Vendedor
             if modalidade == "FOB (Excel)" and 'Desc.Vendedor' in df.columns:
-                media_fob_vendedor = df['Desc.Vendedor'].mean()
-                # Ajuste caso o valor venha como 0.05 em vez de 5.0
-                if 0 < media_fob_vendedor < 1:
-                    media_fob_vendedor *= 100
-                col6.metric("Média Desconto FOB (%)", f"{media_fob_vendedor:.2f}%", help="Média calculada da coluna Desc.Vendedor")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Desconto Total (R$)", fmt_br(total_desc))
+                c2.metric("% Desc Total", f"{perc_desconto_global:.2f}%", delta_color="inverse")
+                c3.metric("% Margem Projetada", f"{margem_final:.2f}%")
+                
+                media_vendedor = df['Desc.Vendedor'].mean()
+                if 0 < media_vendedor < 1: media_vendedor *= 100
+                c4.metric("Média Desc. Vendedor", f"{media_vendedor:.2f}%", help="Média da coluna Desc.Vendedor do arquivo")
             else:
-                col6.metric("Margem Final (Ponderada)", f"{margem_final:.2f}%")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Desconto Total (R$)", fmt_br(total_desc))
+                c2.metric("% Desc Total", f"{perc_desconto_global:.2f}%", delta_color="inverse")
+                c3.metric("% Margem Projetada", f"{margem_final:.2f}%")
 
             st.markdown("---")
             
-            # Análise por Categoria
             st.write("### 📂 Análise por Categoria")
             cat_group = df.groupby('Categoria').agg({'Total': 'sum', 'Desc %': 'mean'}).reset_index()
             cols_cat = st.columns(len(cat_group) if len(cat_group) > 0 else 1)
@@ -187,13 +181,10 @@ if file_excel_precos and file_pedido:
 
             st.write("### 📊 Detalhamento dos Itens")
             df_view = df.copy()
-            
-            # Colunas para exibir no Grid
             cols_grid = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED', 'Desc %', 'Margem %', 'Total']
             if 'Desc.Vendedor' in df_view.columns:
                 cols_grid.insert(6, 'Desc.Vendedor')
 
-            # Formatação para visualização
             for col in ['VLR UND PED', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$']:
                 if col in df_view.columns:
                     df_view[col] = df_view[col].apply(fmt_br)
@@ -205,7 +196,6 @@ if file_excel_precos and file_pedido:
 
             st.dataframe(df_view[cols_grid], use_container_width=True)
 
-            # Sidebar Download
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False)
@@ -216,5 +206,4 @@ if file_excel_precos and file_pedido:
             st.warning("Não foi possível encontrar dados válidos no arquivo de pedido.")
 
     except Exception as e:
-        st.error(f"Ocorreu um erro ao processar os arquivos: {e}")
-        st.info("Dica: Verifique se a aba do arquivo FOB chama-se exatamente 'Resumo' e se a coluna 'Desc.Vendedor' existe.")
+        st.error(f"Erro: {e}")
