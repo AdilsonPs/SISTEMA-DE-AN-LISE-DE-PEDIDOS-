@@ -82,8 +82,7 @@ st.title("🏢 SISTEMA DE ANÁLISE DE PEDIDOS (APS)")
 
 with st.sidebar:
     st.header("👤 Identificação")
-    # Novo campo: Nome do cliente em CAIXA ALTA
-    cliente_input = st.text_input("Nome do Cliente:")
+    cliente_input = st.text_input("Nome do Cliente:", "")
     cliente_nome = cliente_input.upper()
     
     st.header("⚙️ Configurações")
@@ -146,6 +145,7 @@ if file_excel_precos and file_pedido:
             total_ped = df['Total'].sum()
             total_tabela = df.apply(lambda x: x['Tab_Price'] * x['Qtd'], axis=1).sum()
             perc_desconto_global = ( (total_tabela - total_ped) / total_tabela * 100) if total_tabela > 0 else 0
+            margem_final = ((total_ped - total_tabela) / total_ped * 100) if total_ped > 0 else 0
             
             # --- MONTAGEM DA MENSAGEM WHATSAPP ---
             mod_clean = modalidade.split(' ')[0]
@@ -165,10 +165,27 @@ if file_excel_precos and file_pedido:
             # --- EXIBIÇÃO NA TELA ---
             st.write(f"### 📈 Análise: {cliente_nome} ({mod_clean})")
             
+            # Primeira linha de métricas
             m1, m2, m3 = st.columns(3)
             m1.metric("Itens no Pedido", len(df))
             m2.metric("Preço Total Tabela", fmt_br(total_tabela))
             m3.metric("Total Líquido Pedido", fmt_br(total_ped))
+
+            # Segunda linha de métricas (As caixinhas que haviam sumido)
+            if mod_clean == "FOB" and '%FOB' in df.columns:
+                media_fob = df['%FOB'].mean()
+                if 0 < media_fob < 1: media_fob *= 100 # Corrige se estiver em decimal (ex: 0.12 -> 12.0)
+                
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Desconto Total (R$)", fmt_br(total_tabela - total_ped))
+                c2.metric("% Desc Total", f"{perc_desconto_global:.2f}%", delta_color="inverse")
+                c3.metric("% Margem Projetada", f"{margem_final:.2f}%")
+                c4.metric("Média %FOB", f"{media_fob:.2f}%")
+            else:
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Desconto Total (R$)", fmt_br(total_tabela - total_ped))
+                c2.metric("% Desc Total", f"{perc_desconto_global:.2f}%", delta_color="inverse")
+                c3.metric("% Margem Projetada", f"{margem_final:.2f}%")
 
             # Botão WhatsApp na Sidebar
             st.sidebar.markdown(f'''
@@ -189,7 +206,9 @@ if file_excel_precos and file_pedido:
             st.markdown("---")
             st.write("### 📊 Detalhes dos Itens")
             df_view = df.copy()
-            cols_grid = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED', 'Desc %', 'Total']
+            cols_grid = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED', 'Desc %', 'Margem %', 'Total']
+            if '%FOB' in df_view.columns: cols_grid.insert(6, '%FOB')
+
             for col in ['VLR UND PED', 'Total', 'Tab_Price']:
                 df_view[col] = df_view[col].apply(fmt_br)
             st.dataframe(df_view[cols_grid], use_container_width=True)
