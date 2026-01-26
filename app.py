@@ -74,7 +74,6 @@ with st.sidebar:
 
 if file_excel_precos and file_pedido:
     try:
-        # 1. Tabela de Preços
         df_precos = pd.read_excel(file_excel_precos, dtype={'Cod Sap': str})
         df_precos['Cod Sap'] = df_precos['Cod Sap'].astype(str).str.strip()
         df_precos['Tab_Price'] = pd.to_numeric(df_precos['Price'], errors='coerce')
@@ -83,15 +82,12 @@ if file_excel_precos and file_pedido:
 
         df_ped = pd.DataFrame()
 
-        # 2. Extração de Dados
         if modalidade == "CIF (PDF)":
             df_ped = extract_pdf_data(file_pedido)
             if not df_ped.empty:
                 for c in ['VLR UND PED', 'Total', 'Qtd']:
                     df_ped[c] = df_ped[c].astype(str).str.replace('.', '').str.replace(',', '.').astype(float)
-                df_ped['VLR DESC FOB'] = 0.0 # CIF não tem essa coluna
         else:
-            # Lógica FOB com a coluna Desc.Vendedor
             df_fob_raw = pd.read_excel(file_pedido, sheet_name='Resumo', skiprows=2)
             df_fob_raw.columns = df_fob_raw.columns.str.strip()
             
@@ -102,76 +98,71 @@ if file_excel_precos and file_pedido:
                 'VLR UND PED': pd.to_numeric(df_fob_raw['Valor FD / CX'], errors='coerce'),
                 'VLR DESC FOB': pd.to_numeric(df_fob_raw['Desc.Vendedor'], errors='coerce').fillna(0)
             })
-            
-            # Valor Total (calculado para garantir precisão)
             df_ped['Total'] = df_ped['Qtd'] * df_ped['VLR UND PED']
-            
             df_ped = df_ped.dropna(subset=['Cod Sap', 'VLR UND PED'])
             df_ped = df_ped[df_ped['Cod Sap'] != 'nan']
 
-        # 3. Cruzamento e Análise
         if not df_ped.empty:
             df = pd.merge(df_ped, df_precos[['Cod Sap', 'Tab_Price', 'Categoria']], on='Cod Sap', how='left')
             df['Tab_Price'] = df['Tab_Price'].fillna(0)
             
-            # Cálculos
             df['Desc Unit R$'] = df['Tab_Price'] - df['VLR UND PED']
             df['Desc Total R$'] = df['Desc Unit R$'] * df['Qtd']
             df['Desc %'] = df.apply(lambda x: (x['Desc Unit R$'] / x['Tab_Price'] * 100) if x['Tab_Price'] > 0 else 0, axis=1)
-            df['Margem %'] = df.apply(lambda x: ((x['VLR UND PED'] - x['Tab_Price']) / x['VLR UND PED'] * 100) if x['VLR UND PED'] > 0 else 0, axis=1)
-
-            # --- RESUMO GERAL ---
-            st.write(f"### 📈 Resumo Geral ({modalidade.split(' ')[0]})")
             
+            # --- CÁLCULOS DE RESUMO ---
             total_ped = df['Total'].sum()
             total_desc_tab = df['Desc Total R$'].sum()
             total_tabela = (df['Tab_Price'] * df['Qtd']).sum()
-            total_desc_vendedor = (df['VLR DESC FOB'] * df['Qtd']).sum() if modalidade == "FOB (Excel)" else 0
+            margem_final = ((total_ped - total_tabela) / total_ped * 100) if total_ped > 0 else 0
             
-            perc_desc_global = (total_desc_tab / total_tabela * 100) if total_tabela > 0 else 0
+            st.write(f"### 📈 Resumo Geral ({modalidade.split(' ')[0]})")
             
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Itens no Pedido", len(df))
-            c2.metric("Preço Total Tabela", fmt_br(total_tabela))
-            c3.metric("Total Líquido Pedido", fmt_br(total_ped))
+            # Primeira Linha de Métricas
+            r1_c1, r1_c2, r1_c3 = st.columns(3)
+            r1_c1.metric("Itens no Pedido", len(df))
+            r1_c2.metric("Preço Total Tabela", fmt_br(total_tabela))
+            r1_c3.metric("Total Líquido Pedido", fmt_br(total_ped))
 
-            c4, c5, c6 = st.columns(3)
-            c4.metric("Desconto vs Tabela (R$)", fmt_br(total_desc_tab))
-            if modalidade == "FOB (Excel)":
-                c5.metric("VLR DESC FOB (Vendedor)", fmt_br(total_desc_vendedor))
-            else:
-                c5.metric("% Desconto Global", f"{perc_desc_global:.2f}%")
+            # Segunda Linha de Métricas (Onde entra o VLR DESC FOB)
+            r2_c1, r2_c2, r2_c3 = st.columns(3)
+            r2_c1.metric("Desc. vs Tabela (Total)", fmt_br(total_desc_tab))
             
-            c6.metric("Margem Final", f"{((total_ped - total_tabela)/total_ped*100 if total_ped > 0 else 0):.2f}%")
+            if modalidade == "FOB (Excel)":
+                # Cálculo do Desconto FOB Total (Somatório de Desc.Vendedor por item * Qtd)
+                total_desc_vendedor = (df['VLR DESC FOB'] * df['Qtd']).sum()
+                r2_c2.metric("VLR DESC FOB (Vendedor)", fmt_br(total_desc_vendedor))
+            else:
+                perc_desc_global = (total_desc_tab / total_tabela * 100) if total_tabela > 0 else 0
+                r2_c2.metric("% Desconto Global", f"{perc_desc_global:.2f}%")
+            
+            r2_c3.metric("Margem Final", f"{margem_final:.2f}%")
 
             st.markdown("---")
             
             # --- TABELA DETALHADA ---
             st.write("### 📊 Detalhamento dos Itens")
             df_view = df.copy()
+            cols_to_fmt = ['VLR UND PED', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$']
+            if 'VLR DESC FOB' in df_view.columns: cols_to_fmt.append('VLR DESC FOB')
             
-            # Formatação
-            cols_fin = ['VLR UND PED', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$', 'VLR DESC FOB']
-            for col in cols_fin:
+            for col in cols_to_fmt:
                 df_view[col] = df_view[col].apply(fmt_br)
             
             df_view['Desc %'] = df_view['Desc %'].map('{:.2f}%'.format)
-            df_view['Margem %'] = df_view['Margem %'].map('{:.2f}%'.format)
-
-            # Ordem das colunas ajustada para incluir VLR DESC FOB se for o caso
-            base_cols = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED']
-            if modalidade == "FOB (Excel)":
-                base_cols.append('VLR DESC FOB')
             
-            base_cols += ['Desc %', 'Margem %', 'Total']
-            st.dataframe(df_view[base_cols], use_container_width=True)
+            show_cols = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED']
+            if modalidade == "FOB (Excel)": show_cols.append('VLR DESC FOB')
+            show_cols += ['Desc %', 'Total']
+            
+            st.dataframe(df_view[show_cols], use_container_width=True)
 
             # Download
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False)
             st.sidebar.markdown("---")
-            st.sidebar.download_button("📥 Baixar Excel Completo", output.getvalue(), "analise_aps.xlsx", use_container_width=True)
+            st.sidebar.download_button("📥 Baixar Excel", output.getvalue(), "analise_aps.xlsx", use_container_width=True)
     
     except Exception as e:
         st.error(f"Erro: {e}")
