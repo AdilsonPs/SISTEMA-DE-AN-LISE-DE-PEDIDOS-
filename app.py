@@ -4,6 +4,7 @@ import pdfplumber
 import re
 import io
 import base64
+import urllib.parse
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Sistema APS", layout="wide")
@@ -76,7 +77,7 @@ def extract_pdf_data(file):
                         })
     return pd.DataFrame(all_data)
 
-# --- INTERFACE ---
+# --- INTERFACE SIDEBAR ---
 st.title("🏢 SISTEMA DE ANÁLISE DE PEDIDOS (APS)")
 
 with st.sidebar:
@@ -91,6 +92,12 @@ with st.sidebar:
         file_pedido = st.file_uploader("Pedido do Cliente (PDF)", type=['pdf'])
     else:
         file_pedido = st.file_uploader("Arquivo de Conferência (Excel/FOB)", type=['xlsx'])
+
+    # --- NOVO: SEÇÃO WHATSAPP ---
+    st.header("📲 Enviar Resumo")
+    wpp_nome = st.text_input("Nome do Destinatário", "Gestor")
+    wpp_numero = st.text_input("Número (com DDD)", "5511999999999")
+    st.caption("Formato: 55 + DDD + Número")
 
 if file_excel_precos and file_pedido:
     try:
@@ -110,104 +117,100 @@ if file_excel_precos and file_pedido:
         else:
             df_fob_raw = pd.read_excel(file_pedido, sheet_name='Resumo', skiprows=2)
             df_fob_raw.columns = df_fob_raw.columns.str.strip()
-            
             df_ped = pd.DataFrame()
             df_ped['Cod Sap'] = df_fob_raw['Material'].astype(str).str.strip()
             df_ped['Descrição'] = df_fob_raw['Descrição do Material']
             df_ped['Qtd'] = pd.to_numeric(df_fob_raw['Quant. Ped.Período'], errors='coerce')
             df_ped['VLR UND PED'] = pd.to_numeric(df_fob_raw['Valor FD / CX'], errors='coerce')
-            
             if 'Desc.Vendedor' in df_fob_raw.columns:
                 df_ped['%FOB'] = pd.to_numeric(df_fob_raw['Desc.Vendedor'], errors='coerce')
-            
             if 'Valor Total' in df_fob_raw.columns:
                 df_ped['Total'] = pd.to_numeric(df_fob_raw['Valor Total'], errors='coerce')
             else:
                 df_ped['Total'] = df_ped['Qtd'] * df_ped['VLR UND PED']
-            
             df_ped = df_ped.dropna(subset=['Cod Sap', 'VLR UND PED'])
             df_ped = df_ped[df_ped['Cod Sap'] != 'nan']
 
         if not df_ped.empty:
             df = pd.merge(df_ped, df_precos[['Cod Sap', 'Tab_Price', 'Categoria']], on='Cod Sap', how='left')
             df['Tab_Price'] = df['Tab_Price'].fillna(0)
-            
             df['Desc Unit R$'] = df['Tab_Price'] - df['VLR UND PED']
             df['Desc Total R$'] = df['Desc Unit R$'] * df['Qtd']
             df['Desc %'] = df.apply(lambda x: (x['Desc Unit R$'] / x['Tab_Price'] * 100) if x['Tab_Price'] > 0 else 0, axis=1)
             df['Margem %'] = df.apply(lambda x: ((x['VLR UND PED'] - x['Tab_Price']) / x['VLR UND PED'] * 100) if x['VLR UND PED'] > 0 else 0, axis=1)
 
-            # --- EXIBIÇÃO DE MÉTRICAS PRINCIPAIS ---
-            st.write(f"### 📈 Resumo Geral - Modalidade {modalidade.split(' ')[0]}")
-            
+            # --- PROCESSAMENTO WHATSAPP ---
             total_ped = df['Total'].sum()
-            total_desc = df['Desc Total R$'].sum()
             total_tabela = df.apply(lambda x: x['Tab_Price'] * x['Qtd'], axis=1).sum()
-            perc_desconto_global = (total_desc / total_tabela * 100) if total_tabela > 0 else 0
+            perc_desconto_global = ( (total_tabela - total_ped) / total_tabela * 100) if total_tabela > 0 else 0
             margem_final = ((total_ped - total_tabela) / total_ped * 100) if total_ped > 0 else 0
+            
+            # Montagem da mensagem
+            mod_clean = modalidade.split(' ')[0]
+            msg = f"🟢 *Resumo de Pedido APS ({mod_clean})*\n\n"
+            msg += f"👤 *Olá {wpp_nome},*\n"
+            msg += f"📦 Itens: {len(df)}\n"
+            msg += f"💰 Total Líquido: {fmt_br(total_ped)}\n"
+            msg += f"📉 % Desc Total: {perc_desconto_global:.2f}%\n"
+            msg += f"📈 % Margem Projetada: {margem_final:.2f}%\n"
+            
+            if mod_clean == "FOB" and '%FOB' in df.columns:
+                media_fob = df['%FOB'].mean()
+                if 0 < media_fob < 1: media_fob *= 100
+                msg += f"🚛 Média %FOB: {media_fob:.2f}%\n"
+            
+            msg += "\n_Gerado automaticamente pelo Sistema APS_"
+            whatsapp_link = f"https://wa.me/{wpp_numero}?text={urllib.parse.quote(msg)}"
+
+            # --- EXIBIÇÃO ---
+            st.write(f"### 📈 Resumo Geral - Modalidade {mod_clean}")
             
             m1, m2, m3 = st.columns(3)
             m1.metric("Itens no Pedido", len(df))
             m2.metric("Preço Total Tabela", fmt_br(total_tabela))
             m3.metric("Total Líquido Pedido", fmt_br(total_ped))
 
-            if modalidade == "FOB (Excel)" and '%FOB' in df.columns:
+            if mod_clean == "FOB" and '%FOB' in df.columns:
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Desconto Total (R$)", fmt_br(total_desc))
+                c1.metric("Desconto Total (R$)", fmt_br(total_tabela - total_ped))
                 c2.metric("% Desc Total", f"{perc_desconto_global:.2f}%", delta_color="inverse")
                 c3.metric("% Margem Projetada", f"{margem_final:.2f}%")
-                
-                media_fob = df['%FOB'].mean()
-                if 0 < media_fob < 1: media_fob *= 100
                 c4.metric("Média %FOB", f"{media_fob:.2f}%")
             else:
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Desconto Total (R$)", fmt_br(total_desc))
+                c1.metric("Desconto Total (R$)", fmt_br(total_tabela - total_ped))
                 c2.metric("% Desc Total", f"{perc_desconto_global:.2f}%", delta_color="inverse")
                 c3.metric("% Margem Projetada", f"{margem_final:.2f}%")
 
+            # Botão WhatsApp
+            st.sidebar.markdown(f'''
+                <a href="{whatsapp_link}" target="_blank">
+                    <button style="width:100%; background-color:#25D366; color:white; border:none; padding:10px; border-radius:5px; cursor:pointer; font-weight:bold;">
+                        🚀 Enviar Resumo via WhatsApp
+                    </button>
+                </a>
+                ''', unsafe_allow_html=True)
+
             st.markdown("---")
-            
-            # --- ANÁLISE POR CATEGORIA (REINSERIDO) ---
             st.write("### 📂 Análise por Categoria")
             cat_group = df.groupby('Categoria').agg({'Total': 'sum', 'Desc %': 'mean'}).reset_index()
-            # Ajuste de colunas para as categorias não ficarem muito largas
-            cols_cat = st.columns(len(cat_group) if len(cat_group) > 0 else 1)
+            cols_cat = st.columns(len(cat_group))
             for i, row in cat_group.iterrows():
                 with cols_cat[i]:
-                    st.metric(label=row['Categoria'], value=fmt_br(row['Total']), 
-                              delta=f"Desc. Médio: {row['Desc %']:.2f}%", delta_color="inverse")
+                    st.metric(label=row['Categoria'], value=fmt_br(row['Total']), delta=f"Desc: {row['Desc %']:.2f}%", delta_color="inverse")
 
             st.markdown("---")
-
-            # --- GRID DE DETALHES ---
             st.write("### 📊 Detalhamento dos Itens")
             df_view = df.copy()
             cols_grid = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED', 'Desc %', 'Margem %', 'Total']
-            
-            if '%FOB' in df_view.columns:
-                cols_grid.insert(6, '%FOB')
+            if '%FOB' in df_view.columns: cols_grid.insert(6, '%FOB')
 
-            for col in ['VLR UND PED', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$']:
-                if col in df_view.columns:
-                    df_view[col] = df_view[col].apply(fmt_br)
+            for col in ['VLR UND PED', 'Total', 'Tab_Price']:
+                df_view[col] = df_view[col].apply(fmt_br)
             
-            df_view['Desc %'] = df_view['Desc %'].map('{:.2f}%'.format)
-            df_view['Margem %'] = df_view['Margem %'].map('{:.2f}%'.format)
-            if '%FOB' in df_view.columns:
-                df_view['%FOB'] = df_view['%FOB'].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
-
             st.dataframe(df_view[cols_grid], use_container_width=True)
 
-            # --- DOWNLOAD ---
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df.to_excel(writer, index=False)
-            st.sidebar.markdown("---")
-            st.sidebar.download_button("📥 Baixar Análise em Excel", output.getvalue(), "analise_aps.xlsx", use_container_width=True)
-
         else:
-            st.warning("Não foi possível encontrar dados válidos no arquivo de pedido.")
-
+            st.warning("Não foi possível encontrar dados válidos.")
     except Exception as e:
-        st.error(f"Erro no processamento: {e}")
+        st.error(f"Erro: {e}")
