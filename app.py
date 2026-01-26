@@ -117,8 +117,9 @@ if file_excel_precos and file_pedido:
             df_ped['Qtd'] = pd.to_numeric(df_fob_raw['Quant. Ped.Período'], errors='coerce')
             df_ped['VLR UND PED'] = pd.to_numeric(df_fob_raw['Valor FD / CX'], errors='coerce')
             
+            # Captura Desc.Vendedor e renomeia para %FOB
             if 'Desc.Vendedor' in df_fob_raw.columns:
-                df_ped['Desc.Vendedor'] = pd.to_numeric(df_fob_raw['Desc.Vendedor'], errors='coerce')
+                df_ped['%FOB'] = pd.to_numeric(df_fob_raw['Desc.Vendedor'], errors='coerce')
             
             if 'Valor Total' in df_fob_raw.columns:
                 df_ped['Total'] = pd.to_numeric(df_fob_raw['Valor Total'], errors='coerce')
@@ -137,7 +138,6 @@ if file_excel_precos and file_pedido:
             df['Desc %'] = df.apply(lambda x: (x['Desc Unit R$'] / x['Tab_Price'] * 100) if x['Tab_Price'] > 0 else 0, axis=1)
             df['Margem %'] = df.apply(lambda x: ((x['VLR UND PED'] - x['Tab_Price']) / x['VLR UND PED'] * 100) if x['VLR UND PED'] > 0 else 0, axis=1)
 
-            # --- EXIBIÇÃO ---
             st.write(f"### 📈 Resumo Geral - Modalidade {modalidade.split(' ')[0]}")
             
             total_ped = df['Total'].sum()
@@ -146,23 +146,22 @@ if file_excel_precos and file_pedido:
             perc_desconto_global = (total_desc / total_tabela * 100) if total_tabela > 0 else 0
             margem_final = ((total_ped - total_tabela) / total_ped * 100) if total_ped > 0 else 0
             
-            # Linha 1: Valores Financeiros
+            # Linha 1: Financeiro
             m1, m2, m3 = st.columns(3)
             m1.metric("Itens no Pedido", len(df))
             m2.metric("Preço Total Tabela", fmt_br(total_tabela))
             m3.metric("Total Líquido Pedido", fmt_br(total_ped))
 
-            # Linha 2: Percentuais e Descontos
-            # Se for FOB, usaremos 4 colunas para caber o Desconto Vendedor
-            if modalidade == "FOB (Excel)" and 'Desc.Vendedor' in df.columns:
+            # Linha 2: Percentuais (Dinâmico para FOB)
+            if modalidade == "FOB (Excel)" and '%FOB' in df.columns:
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Desconto Total (R$)", fmt_br(total_desc))
                 c2.metric("% Desc Total", f"{perc_desconto_global:.2f}%", delta_color="inverse")
                 c3.metric("% Margem Projetada", f"{margem_final:.2f}%")
                 
-                media_vendedor = df['Desc.Vendedor'].mean()
-                if 0 < media_vendedor < 1: media_vendedor *= 100
-                c4.metric("Média Desc. Vendedor", f"{media_vendedor:.2f}%", help="Média da coluna Desc.Vendedor do arquivo")
+                media_fob = df['%FOB'].mean()
+                if 0 < media_fob < 1: media_fob *= 100
+                c4.metric("Média %FOB", f"{media_fob:.2f}%", help="Média da coluna de desconto original do arquivo")
             else:
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Desconto Total (R$)", fmt_br(total_desc))
@@ -171,19 +170,13 @@ if file_excel_precos and file_pedido:
 
             st.markdown("---")
             
-            st.write("### 📂 Análise por Categoria")
-            cat_group = df.groupby('Categoria').agg({'Total': 'sum', 'Desc %': 'mean'}).reset_index()
-            cols_cat = st.columns(len(cat_group) if len(cat_group) > 0 else 1)
-            for i, row in cat_group.iterrows():
-                with cols_cat[i]:
-                    st.metric(label=row['Categoria'], value=fmt_br(row['Total']), 
-                              delta=f"Desc. Médio: {row['Desc %']:.2f}%", delta_color="inverse")
-
+            # Grid de Detalhes
             st.write("### 📊 Detalhamento dos Itens")
             df_view = df.copy()
             cols_grid = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED', 'Desc %', 'Margem %', 'Total']
-            if 'Desc.Vendedor' in df_view.columns:
-                cols_grid.insert(6, 'Desc.Vendedor')
+            
+            if '%FOB' in df_view.columns:
+                cols_grid.insert(6, '%FOB')
 
             for col in ['VLR UND PED', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$']:
                 if col in df_view.columns:
@@ -191,11 +184,12 @@ if file_excel_precos and file_pedido:
             
             df_view['Desc %'] = df_view['Desc %'].map('{:.2f}%'.format)
             df_view['Margem %'] = df_view['Margem %'].map('{:.2f}%'.format)
-            if 'Desc.Vendedor' in df_view.columns:
-                df_view['Desc.Vendedor'] = df_view['Desc.Vendedor'].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
+            if '%FOB' in df_view.columns:
+                df_view['%FOB'] = df_view['%FOB'].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
 
             st.dataframe(df_view[cols_grid], use_container_width=True)
 
+            # Download
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False)
@@ -206,4 +200,4 @@ if file_excel_precos and file_pedido:
             st.warning("Não foi possível encontrar dados válidos no arquivo de pedido.")
 
     except Exception as e:
-        st.error(f"Erro: {e}")
+        st.error(f"Erro no processamento: {e}")
