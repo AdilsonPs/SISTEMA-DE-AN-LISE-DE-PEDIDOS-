@@ -136,9 +136,11 @@ if file_excel_precos and file_pedido:
         if not df_ped.empty:
             df = pd.merge(df_ped, df_precos[['Cod Sap', 'Tab_Price', 'Categoria']], on='Cod Sap', how='left')
             df['Tab_Price'] = df['Tab_Price'].fillna(0)
+            
+            # Cálculos de Desconto e Margem por Item
             df['Desc Unit R$'] = df['Tab_Price'] - df['VLR UND PED']
-            df['Desc Total R$'] = df['Desc Unit R$'] * df['Qtd']
             df['Desc %'] = df.apply(lambda x: (x['Desc Unit R$'] / x['Tab_Price'] * 100) if x['Tab_Price'] > 0 else 0, axis=1)
+            # Margem calculada sobre o Valor do Pedido (Venda)
             df['Margem %'] = df.apply(lambda x: ((x['VLR UND PED'] - x['Tab_Price']) / x['VLR UND PED'] * 100) if x['VLR UND PED'] > 0 else 0, axis=1)
 
             # --- PROCESSAMENTO DOS TOTAIS ---
@@ -152,7 +154,8 @@ if file_excel_precos and file_pedido:
             msg = f"📦 *Resumo de Pedido - {cliente_nome} - {mod_clean}*\n\n"
             msg += f"📋 *Itens:* {len(df)}\n"
             msg += f"💰 *Total Líquido:* {fmt_br(total_ped)}\n"
-            msg += f"📉 *% Desc Total:* {perc_desconto_global:.2f}%\n\n"
+            msg += f"📉 *% Desc Total:* {perc_desconto_global:.2f}%\n"
+            msg += f"📈 *% Margem Projetada:* {margem_final:.2f}%\n\n"
             
             msg += "📂 *Resumo por Categoria:*\n"
             cat_group = df.groupby('Categoria').agg({'Total': 'sum', 'Desc %': 'mean'}).reset_index()
@@ -165,16 +168,16 @@ if file_excel_precos and file_pedido:
             # --- EXIBIÇÃO NA TELA ---
             st.write(f"### 📈 Análise: {cliente_nome} ({mod_clean})")
             
-            # Primeira linha de métricas
+            # Linha 1: Métricas de Volume/Valor
             m1, m2, m3 = st.columns(3)
             m1.metric("Itens no Pedido", len(df))
             m2.metric("Preço Total Tabela", fmt_br(total_tabela))
             m3.metric("Total Líquido Pedido", fmt_br(total_ped))
 
-            # Segunda linha de métricas (As caixinhas que haviam sumido)
+            # Linha 2: Métricas de Rentabilidade
             if mod_clean == "FOB" and '%FOB' in df.columns:
                 media_fob = df['%FOB'].mean()
-                if 0 < media_fob < 1: media_fob *= 100 # Corrige se estiver em decimal (ex: 0.12 -> 12.0)
+                if 0 < media_fob < 1: media_fob *= 100
                 
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Desconto Total (R$)", fmt_br(total_tabela - total_ped))
@@ -206,11 +209,21 @@ if file_excel_precos and file_pedido:
             st.markdown("---")
             st.write("### 📊 Detalhes dos Itens")
             df_view = df.copy()
+            
+            # Organização das colunas na tabela
             cols_grid = ['Cod Sap', 'Categoria', 'Descrição', 'Qtd', 'Tab_Price', 'VLR UND PED', 'Desc %', 'Margem %', 'Total']
             if '%FOB' in df_view.columns: cols_grid.insert(6, '%FOB')
 
+            # Formatação de Moeda para exibição
             for col in ['VLR UND PED', 'Total', 'Tab_Price']:
                 df_view[col] = df_view[col].apply(fmt_br)
+            
+            # Formatação de Percentual para exibição
+            df_view['Desc %'] = df_view['Desc %'].apply(lambda x: f"{x:.2f}%")
+            df_view['Margem %'] = df_view['Margem %'].apply(lambda x: f"{x:.2f}%")
+            if '%FOB' in df_view.columns:
+                df_view['%FOB'] = df_view['%FOB'].apply(lambda x: f"{x:.2f}%")
+
             st.dataframe(df_view[cols_grid], use_container_width=True)
 
         else:
