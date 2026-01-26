@@ -8,7 +8,6 @@ import base64
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Sistema APS", layout="wide")
 
-# Função para converter imagem local para base64
 def get_base64_of_bin_file(bin_file):
     try:
         with open(bin_file, 'rb') as f:
@@ -17,7 +16,6 @@ def get_base64_of_bin_file(bin_file):
     except:
         return None
 
-# Fundo com imagem
 bin_str = get_base64_of_bin_file('logo.jpg') 
 if bin_str:
     bg_img_code = f"""
@@ -30,10 +28,7 @@ if bin_str:
     </style>
     """
     st.markdown(bg_img_code, unsafe_allow_html=True)
-else:
-    st.sidebar.warning("Imagem de fundo 'logo.jpg' não encontrada.")
 
-# --- ESTILO CSS ---
 st.markdown("""
     <style>
     [data-testid="stMetricValue"] { font-size: 1.6rem !important; color: #0d47a1 !important; }
@@ -79,45 +74,66 @@ def extract_pdf_data(file):
 st.title("🏢 SISTEMA DE ANÁLISE DE PEDIDOS (APS)")
 
 with st.sidebar:
+    st.header("⚙️ Configurações")
+    # Novo seletor CIF/FOB
+    modalidade = st.radio("Modalidade do Pedido:", ["CIF (PDF)", "FOB (Excel)"])
+    
     st.header("📁 Upload")
-    file_excel = st.file_uploader("Tabela de Preços (Excel)", type=['xlsx'])
-    file_pdf = st.file_uploader("Pedido do Cliente (PDF)", type=['pdf'])
+    file_excel_precos = st.file_uploader("Tabela de Preços (Excel)", type=['xlsx'])
+    
+    file_pedido = None
+    if modalidade == "CIF (PDF)":
+        file_pedido = st.file_uploader("Pedido do Cliente (PDF)", type=['pdf'])
+    else:
+        file_pedido = st.file_uploader("Arquivo de Conferência (Excel/FOB)", type=['xlsx'])
 
-if file_excel and file_pdf:
+if file_excel_precos and file_pedido:
     try:
-        df_precos = pd.read_excel(file_excel, dtype={'Cod Sap': str})
+        # 1. Carregar Tabela de Preços
+        df_precos = pd.read_excel(file_excel_precos, dtype={'Cod Sap': str})
         df_precos['Cod Sap'] = df_precos['Cod Sap'].astype(str).str.strip()
         df_precos['Tab_Price'] = pd.to_numeric(df_precos['Price'], errors='coerce')
-        
         if 'Categoria' not in df_precos.columns:
             df_precos['Categoria'] = 'Geral'
 
-        df_ped = extract_pdf_data(file_pdf)
-        
-        if not df_ped.empty:
-            for c in ['VLR UND PED', 'Total', 'Qtd']:
-                df_ped[c] = df_ped[c].astype(str).str.replace('.', '').str.replace(',', '.').astype(float)
+        # 2. Carregar Dados do Pedido baseado na modalidade
+        df_ped = pd.DataFrame()
 
+        if modalidade == "CIF (PDF)":
+            df_ped = extract_pdf_data(file_pedido)
+            if not df_ped.empty:
+                for c in ['VLR UND PED', 'Total', 'Qtd']:
+                    df_ped[c] = df_ped[c].astype(str).str.replace('.', '').str.replace(',', '.').astype(float)
+        else:
+            # Lógica para pedido FOB via Excel (aba Resumo conforme anexo)
+            # Pulamos as 2 primeiras linhas de cabeçalho informativo do Excel
+            df_fob = pd.read_excel(file_pedido, sheet_name='Resumo', skiprows=2)
+            df_ped = pd.DataFrame({
+                'Cod Sap': df_fob['Material'].astype(str).str.strip(),
+                'Descrição': df_fob['Descrição do Material'],
+                'Qtd': pd.to_numeric(df_fob['Quant. Ped.Período'], errors='coerce'),
+                'VLR UND PED': pd.to_numeric(df_fob[' Valor FD / CX'], errors='coerce'),
+                'Total': pd.to_numeric(df_fob[' Valor Total'], errors='coerce')
+            }).dropna(subset=['Cod Sap', 'Total'])
+
+        # 3. Processamento e Cálculos (Comum a ambos)
+        if not df_ped.empty:
             df = pd.merge(df_ped, df_precos[['Cod Sap', 'Tab_Price', 'Categoria']], on='Cod Sap', how='left')
             
-            # Cálculos por Item
+            # Cálculos
             df['Desc Unit R$'] = df['Tab_Price'] - df['VLR UND PED']
             df['Desc Total R$'] = df['Desc Unit R$'] * df['Qtd']
             df['Desc %'] = (df['Desc Unit R$'] / df['Tab_Price']) * 100
             df['Margem %'] = ((df['VLR UND PED'] - df['Tab_Price']) / df['VLR UND PED']) * 100
 
             # --- RESUMO GERAL ---
-            st.write("### 📈 Resumo Geral")
+            st.write(f"### 📈 Resumo Geral - Modalidade {modalidade.split(' ')[0]}")
             total_ped = df['Total'].sum()
             total_desc = df['Desc Total R$'].sum()
             total_tabela = total_ped + total_desc
-            
-            # Cálculo do Desconto Médio do Pedido Inteiro
             perc_desconto_total = (total_desc / total_tabela * 100) if total_tabela != 0 else 0
-            # Margem Final Consolidada (Ponderada)
             margem_final = ((total_ped - total_tabela) / total_ped * 100) if total_ped != 0 else 0
             
-            # Exibição em duas linhas de 3 colunas para melhor leitura
             r1_c1, r1_c2, r1_c3 = st.columns(3)
             r1_c1.metric("Itens no Pedido", f"{len(df)}")
             r1_c2.metric("Preço Total Tabela", fmt_br(total_tabela))
@@ -132,30 +148,19 @@ if file_excel and file_pdf:
 
             # --- ANÁLISE POR CATEGORIA ---
             st.write("### 📂 Análise por Categoria")
-            cat_group = df.groupby('Categoria').agg({
-                'Total': 'sum',
-                'Desc %': 'mean'
-            }).reset_index()
-
+            cat_group = df.groupby('Categoria').agg({'Total': 'sum', 'Desc %': 'mean'}).reset_index()
             cols_cat = st.columns(len(cat_group) if len(cat_group) > 0 else 1)
             for i, row in cat_group.iterrows():
                 with cols_cat[i]:
-                    st.metric(
-                        label=row['Categoria'], 
-                        value=fmt_br(row['Total']), 
-                        delta=f"Desc. Médio: {row['Desc %']:.2f}%", 
-                        delta_color="inverse"
-                    )
+                    st.metric(label=row['Categoria'], value=fmt_br(row['Total']), 
+                              delta=f"Desc. Médio: {row['Desc %']:.2f}%", delta_color="inverse")
 
             # --- TABELA DETALHADA ---
             st.write("### 📊 Detalhamento dos Itens")
             df_view = df.copy()
-            
-            # Formatação de colunas financeiras para visualização
             for col in ['VLR UND PED', 'Total', 'Tab_Price', 'Desc Unit R$', 'Desc Total R$']:
                 df_view[col] = df_view[col].apply(fmt_br)
             
-            # Formatação de percentuais
             df_view['Desc %'] = df_view['Desc %'].map('{:.2f}%'.format)
             df_view['Margem %'] = df_view['Margem %'].map('{:.2f}%'.format)
 
@@ -168,9 +173,8 @@ if file_excel and file_pdf:
                 df.to_excel(writer, index=False)
             st.sidebar.markdown("---")
             st.sidebar.download_button("📥 Baixar Excel Completo", output.getvalue(), "analise_aps.xlsx", use_container_width=True)
-
         else:
-            st.warning("Nenhum dado compatível com o padrão (Código SAP) encontrado no PDF.")
+            st.warning("Nenhum dado encontrado no arquivo enviado.")
 
     except Exception as e:
         st.error(f"Erro no processamento: {e}")
