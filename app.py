@@ -99,7 +99,7 @@ with st.sidebar:
 
     st.header("📲 Enviar Resumo")
     wpp_destinatario = st.text_input("Nome do Destinatário", "Gestor")
-    wpp_numero = st.text_input("Número (com DDD)", "5511999999999")
+    wpp_numero = st.text_input("Número (com DDD)", "55011999999999")
 
 if file_excel_precos and file_pedido:
     try:
